@@ -17,10 +17,23 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
+import os
+if os.path.exists(os.path.expanduser('~/.genesis-debug')):
+    def debug(fmt, *args):
+        if args:
+            print fmt.format(*args)
+        else:
+            print fmt
+else:
+    def debug(*args):
+        pass
 
+debug("import: pre-import")
 import urllib,urllib2,re,os,threading,datetime,time,base64,xbmc,xbmcplugin,xbmcgui,xbmcaddon,xbmcvfs
+debug("import: basic-import")
 from operator import itemgetter
 import commonsources
+debug("import: commonsources")
 
 try:
     from sqlite3 import dbapi2 as database
@@ -34,6 +47,8 @@ try:
     import json
 except:
     import simplejson as json
+
+debug("import: allmodules")
 
 
 action              = None
@@ -53,6 +68,8 @@ PseudoTV            = xbmcgui.Window(10000).getProperty('PseudoTVRunning')
 addonLogos          = os.path.join(addonPath,'resources/logos')
 addonSettings       = os.path.join(dataPath,'settings.db')
 addonCache          = os.path.join(dataPath,'cache.db')
+
+print "settings"
 
 
 class main:
@@ -4470,6 +4487,7 @@ class episodes:
         return title
 
     def tvrage_redirect(self, title, year, imdb, tvdb, season, episode, show, date, genre):
+        debug('TVRAGE: begin')
         try:
             exception = True
             if len(season) > 3: exception = False
@@ -4482,6 +4500,7 @@ class episodes:
         except:
             return (season, episode)
 
+        debug('TVRAGE: basic mode')
         try:
             tvrage = '0'
             if not imdb.startswith('tt'): imdb = 'tt' + imdb
@@ -4495,6 +4514,7 @@ class episodes:
 
         try:
             if not tvrage == '0': raise Exception()
+            debug('TVRAGE: show information/title')
             url = link().tvrage_search % urllib.quote_plus(show)
             result = getUrl(url, timeout='10').result
             result = common.parseDOM(result, "show")
@@ -4506,6 +4526,7 @@ class episodes:
 
         try:
             if tvrage == '0': raise Exception()
+            debug('TVRAGE: show info page')
             url = link().tvrage_info % tvrage
             result = getUrl(url, timeout='5').result
             search = re.compile('<td.+?><a.+?title=.+?season.+?episode.+?>(\d+?)x(\d+?)<.+?<td.+?>(\d+?/.+?/\d+?)<.+?<td.+?>.+?href=.+?>(.+?)<').findall(result.replace('\n',''))
@@ -4519,6 +4540,7 @@ class episodes:
 
         try:
             if tvrage == '0': raise Exception()
+            debug('TVRAGE: episode guide')
             url = link().epguides_info % tvrage
             result = getUrl(url, timeout='5').result
             search = re.compile('\d+?,(\d+?),(\d+?),.+?,(\d+?/.+?/\d+?),"(.+?)",.+?,".+?"').findall(result)
@@ -4529,7 +4551,7 @@ class episodes:
             if len(match) == 1: return (str('%01d' % int(match[0][0])), str('%01d' % int(match[0][1])))
         except:
             pass
-
+        debug('TVRAGE: fin: season=%s, episode=%s' % (season, episode))
         return (season, episode)
 
     def trakt_list(self, url, auth=False):
@@ -5090,6 +5112,7 @@ class resolver:
             return title
 
     def sources_get(self, name, title, year, imdb, tvdb, season, episode, show, show_alt, date, genre):
+        debug("RS: enter resolver")
         if show == None: content = 'movie'
         else: content = 'episode'
 
@@ -5120,7 +5143,7 @@ class resolver:
 
         self.sources = global_sources
         self.sources = self.sources_filter()
-
+        debug("RS: finish resolver")
         return self.sources
 
     def sources_movie(self, name, title, year, imdb, source):
@@ -5189,8 +5212,10 @@ class resolver:
             match = dbcur.fetchone()
             t1 = int(re.sub('[^0-9]', '', str(match[5])))
             t2 = int(datetime.datetime.now().strftime("%Y%m%d%H%M"))
+            debug("RSTV: {0}: foundcache, {1}, {2}", source, t1, t2)
             update = abs(t2 - t1) > 60
             if update == False:
+                debug("RSTV: {0}: usecache", source)
                 sources = json.loads(match[4])
                 return global_sources.extend(sources)
         except:
@@ -5242,6 +5267,8 @@ class resolver:
             dbcon.commit()
         except:
             pass
+
+        debug("RS: %s: fin" % source)
 
     def sources_resolve(self, url, provider):
         try:
