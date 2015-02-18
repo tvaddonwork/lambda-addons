@@ -2349,6 +2349,10 @@ class link:
 
 class database(object):
     created_tables = set()
+    TABLE_TVRAGE = """
+        CREATE TABLE IF NOT EXISTS tvrage (identifier TEXT, value TEXT, timestamp datetime DEFAULT CURRENT_TIMESTAMP, UNIQUE(identifier));
+    """
+
     @classmethod
     def connect(cls, dbname, tables=()):
         try:
@@ -4513,7 +4517,64 @@ class episodes:
         title = re.sub('\n|\.(UK|US|AU|\d{4})$|\s(vs|v[.])\s|(:|;|-|"|,|\'|\.|\?)|\s', '', title).lower()
         return title
 
-    def tvrage_redirect(self, title, year, imdb, tvdb, season, episode, show, date, genre):
+    def _tvrage_cache_get(self, identifier, dbconn=None):
+        if dbconn is None:
+            dbconn = database.connect(addonCache, tables=['tvrage'])
+        cursor = dbconn.cursor()
+        cursor.execute("SELECT value, timestamp FROM tvrage WHERE identifier=?", (identifier, ))
+        for value, ts in cursor:
+            debug('TVRAGE: in cache')
+            if check_timestamp(ts, 'tvrage'):
+                debug('TVRAGE: cache OK')
+                return json.loads(value)
+
+    def _tvrage_cached(self, method, params, kw=None, dbconn=None):
+        key = json.dumps(params)
+        value = self._tvrage_cache_get(key, dbconn)
+        if value is None:
+            if kw is None:
+                kw = {}
+            value = method(*params, **kw)
+            dbconn.cursor().execute("INSERT OR REPLACE INTO tvrage (identifier, value) VALUES (?, ?)", (key, json.dumps(value)))
+            dbconn.commit()
+        return value
+
+    def cached_tvrage(self, title, year, imdb, tvdb, season, episode, show, date, genre):
+        dbconn = database.connect(addonCache, tables=['tvrage'])
+        tvrage_id = self._tvrage_cached(self.tvrage_resolve_show_id, (imdb, show, year), dbconn=dbconn)
+        params = (title, year, imdb, tvdb, season, episode, show, date, genre)
+        value = self._tvrage_cached(self.tvrage_redirect, params, {'tvrage': tvrage_id}, dbconn=dbconn)
+
+        return tuple(value)
+
+    def tvrage_resolve_show_id(self, imdb, show, year):
+        debug('TVRAGE: trakt search')
+        try:
+            tvrage = '0'
+            if not imdb.startswith('tt'): imdb = 'tt' + imdb
+            result = getTrakt().result(link().trakt_tv_summary % imdb)
+            result = json.loads(result)
+            tvrage = result['ids']['tvrage']
+            if tvrage is None:
+                tvrage = '0'
+            tvrage = str(tvrage)
+        except:
+            pass
+
+        if tvrage == '0':
+            try:
+                debug('TVRAGE: show ID/title show={0}', show)
+                url = link().tvrage_search % urllib.quote_plus(show)
+                result = getUrl(url, timeout='10').result
+                result = common.parseDOM(result, "show")
+                result = [i for i in result if self.cleantitle_tv(show) == self.cleantitle_tv(common.replaceHTMLCodes(common.parseDOM(i, "name")[0])) and any(x in common.parseDOM(i, "started")[0] for x in [str(year), str(int(year)+1), str(int(year)-1)])][0]
+                tvrage = common.parseDOM(result, "showid")[0]
+                tvrage = str(tvrage)
+            except Exception, e:
+                debug('TVRAGE ERROR: {0!r}', e)
+        return tvrage
+
+    def tvrage_redirect(self, title, year, imdb, tvdb, season, episode, show, date, genre, tvrage=None):
         debug('TVRAGE: begin')
         try:
             exception = True
@@ -4527,37 +4588,17 @@ class episodes:
         except:
             return (season, episode)
 
-        debug('TVRAGE: basic mode')
-        try:
-            tvrage = '0'
-            if not imdb.startswith('tt'): imdb = 'tt' + imdb
-            result = getTrakt().result(link().trakt_tv_summary % imdb)
-            result = json.loads(result)
-            tvrage = result['ids']['tvrage']
-            if tvrage == None: tvrage = '0'
-            tvrage = str(tvrage)
-        except:
-            pass
+        if tvrage is None:
+            tvrage = self.tvrage_resolve_show_id(imdb, show, year)
 
-        try:
-            if not tvrage == '0': raise Exception()
-            debug('TVRAGE: show information/title')
-            url = link().tvrage_search % urllib.quote_plus(show)
-            result = getUrl(url, timeout='10').result
-            result = common.parseDOM(result, "show")
-            result = [i for i in result if self.cleantitle_tv(show) == self.cleantitle_tv(common.replaceHTMLCodes(common.parseDOM(i, "name")[0])) and any(x in common.parseDOM(i, "started")[0] for x in [str(year), str(int(year)+1), str(int(year)-1)])][0]
-            tvrage = common.parseDOM(result, "showid")[0]
-            tvrage = str(tvrage)
-        except:
-            pass
-
+        monthNameMap = {'01':'Jan', '02':'Feb', '03':'Mar', '04':'Apr', '05':'May', '06':'Jun', '07':'Jul', '08':'Aug', '09':'Sep', '10':'Oct', '11':'Nov', '12':'Dec'}
         try:
             if tvrage == '0': raise Exception()
             debug('TVRAGE: show info page')
             url = link().tvrage_info % tvrage
             result = getUrl(url, timeout='5').result
             search = re.compile('<td.+?><a.+?title=.+?season.+?episode.+?>(\d+?)x(\d+?)<.+?<td.+?>(\d+?/.+?/\d+?)<.+?<td.+?>.+?href=.+?>(.+?)<').findall(result.replace('\n',''))
-            d = '%02d/%s/%s' % (int(date.split('-')[2]), {'01':'Jan', '02':'Feb', '03':'Mar', '04':'Apr', '05':'May', '06':'Jun', '07':'Jul', '08':'Aug', '09':'Sep', '10':'Oct', '11':'Nov', '12':'Dec'}[date.split('-')[1]], date.split('-')[0])
+            d = '%02d/%s/%s' % (int(date.split('-')[2]), monthNameMap[date.split('-')[1]], date.split('-')[0])
             match = [i for i in search if d == i[2]]
             if len(match) == 1: return (str('%01d' % int(match[0][0])), str('%01d' % int(match[0][1])))
             match = [i for i in search if self.cleantitle_tv(title) == self.cleantitle_tv(i[3])]
@@ -4571,7 +4612,7 @@ class episodes:
             url = link().epguides_info % tvrage
             result = getUrl(url, timeout='5').result
             search = re.compile('\d+?,(\d+?),(\d+?),.+?,(\d+?/.+?/\d+?),"(.+?)",.+?,".+?"').findall(result)
-            d = '%02d/%s/%s' % (int(date.split('-')[2]), {'01':'Jan', '02':'Feb', '03':'Mar', '04':'Apr', '05':'May', '06':'Jun', '07':'Jul', '08':'Aug', '09':'Sep', '10':'Oct', '11':'Nov', '12':'Dec'}[date.split('-')[1]], date.split('-')[0][-2:])
+            d = '%02d/%s/%s' % (int(date.split('-')[2]), monthNameMap[date.split('-')[1]], date.split('-')[0][-2:])
             match = [i for i in search if d == i[2]]
             if len(match) == 1: return (str('%01d' % int(match[0][0])), str('%01d' % int(match[0][1])))
             match = [i for i in search if self.cleantitle_tv(title) == self.cleantitle_tv(i[3])]
@@ -5162,7 +5203,7 @@ class resolver:
             for source in sourceDict: threads.append(Thread(self.sources_movie, name, title, year, imdb, source))
         else:
             show, show_alt = self.normaltitle(show), self.normaltitle(show_alt)
-            season, episode = episodes().tvrage_redirect(title, year, imdb, tvdb, season, episode, show, date, genre)
+            season, episode = episodes().cached_tvrage(title, year, imdb, tvdb, season, episode, show, date, genre)
             for source in sourceDict: threads.append(Thread(self.sources_tv, name, title, year, imdb, tvdb, date, season, episode, show, show_alt, source))
 
         [i.start() for i in threads]
