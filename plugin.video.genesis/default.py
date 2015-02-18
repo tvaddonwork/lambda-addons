@@ -36,10 +36,6 @@ import commonsources
 debug("import: commonsources")
 
 try:
-    from sqlite3 import dbapi2 as database
-except:
-    from pysqlite2 import dbapi2 as database
-try:
     import CommonFunctions as common
 except:
     import commonfunctionsdummy as common
@@ -2349,6 +2345,37 @@ class link:
         self.scn_added_hd = 'http://predb.me/?cats=movies-hd&page=1'
         self.scn_tv_base = 'http://m2v.ru'
         self.scn_tv_added = 'http://m2v.ru/?Part=11&func=part&page=1'
+
+
+class database(object):
+    created_tables = set()
+    @classmethod
+    def connect(cls, dbname, tables=()):
+        try:
+            from sqlite3 import dbapi2 as dbapi
+        except ImportError:
+            from pysqlite2 import dbapi2 as dbapi
+
+        connection = dbapi.connect(dbname)
+        for table in tables:
+            if table not in cls.created_tables:
+                cls.created_tables.add(table)
+                connection.execute(getattr(cls, 'TABLE_%s' % table.upper()))
+        return connection
+
+
+def check_timestamp(ts, scope):
+    ts = datetime.datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
+    now = datetime.datetime.utcnow()
+    if now > ts:
+        delta = now - ts
+    else:
+        delta = ts - now
+    debug('delta: %r, %r, %r' % (delta, now, ts))
+    if delta.seconds < 1800:
+        return True
+    return False
+
 
 class people:
     def __init__(self):
